@@ -32,13 +32,23 @@ You can configure the GPU backend in `~/.config/linux-studio-effects/state.json`
 
 ```json
 {
+  "effects": ["replace", "blur"], // Options: "blur", "replace"
   "gpu_backend": "nvidia" // Options: "nvidia", "intel", "cpu", "auto"
 }
 ```
 
-- **nvidia**: Uses `nvvideoconvert`. Requires proprietary drivers and GStreamer NVENC/DEC plugins.
-- **intel**: Uses `vaapipostproc`. Requires `gstreamer1.0-vaapi`.
-- **auto**: Defaults to generic `videoscale` (CPU) if not specified, but will aim to detect hardware in future updates.
+- **effects**: A list of active effects. Combined to define the pipeline behavior.
+- **gpu_backend**:
+    - **nvidia**: Uses `nvvideoconvert`. Requires proprietary drivers and GStreamer NVENC/DEC plugins.
+    - **intel**: Uses `vaapipostproc`. Requires `gstreamer1.0-vaapi`.
+    - **auto**: Defaults to generic `videoscale` (CPU).
+
+## Status Indicator
+
+The Extension now displays real-time status of the pipeline, including:
+- **Active Backend**: Shows which technology is properly loaded (e.g., "Nvidia CUDA").
+- **Efficiency**: Confirms hardware acceleration is improving energy profile.
+
 
 ## Current Status
 

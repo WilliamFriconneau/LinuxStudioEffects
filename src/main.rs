@@ -3,7 +3,7 @@ use gstreamer::{MessageView, State};
 use gstreamer::prelude::*;
 use log::{info, error, warn, debug};
 use notify::{Watcher, RecursiveMode, Event};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -16,24 +16,32 @@ use pipeline::StudioPipeline;
 
 const CONFIG_PATH: &str = "/Users/wiwi/.config/linux-studio-effects/state.json";
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 struct AppConfig {
     active: bool,
     #[serde(default = "default_camera_priority")]
-    camera_priority: Vec<String>,
-    blur_strength: f32, // Used for blur Amount
+    pub camera_priority: Vec<String>,
+    blur_strength: f32,
     sabotage: String,
     lighting_boost: bool,
-    #[serde(default = "default_effect_mode")]
-    effect_mode: String, // "blur", "replace", "replace_and_blur"
+    #[serde(default = "default_effects")]
+    pub effects: Vec<String>, // Replaces single string mode. e.g. ["replace", "blur"]
     #[serde(default)]
-    background_image: String, // Path to image
+    background_image: String,
     #[serde(default = "default_gpu_backend")]
-    pub gpu_backend: String, // "auto", "nvidia", "intel", "cpu"
+    pub gpu_backend: String,
 }
 
-fn default_effect_mode() -> String {
-    "blur".to_string()
+#[derive(Debug, Serialize)]
+struct StatusReport {
+    backend: String,
+    tech: String, // e.g. "Nvidia CUDA", "Intel QuickSync", "CPU"
+    active_effects: Vec<String>,
+    fps: u32,
+}
+
+fn default_effects() -> Vec<String> {
+    vec!["blur".to_string()]
 }
 
 fn default_gpu_backend() -> String {
@@ -52,7 +60,7 @@ impl Default for AppConfig {
             blur_strength: 0.5,
             sabotage: "none".to_string(),
             lighting_boost: false,
-            effect_mode: default_effect_mode(),
+            effects: default_effects(),
             background_image: "".to_string(),
             gpu_backend: default_gpu_backend(),
         }
@@ -70,7 +78,14 @@ fn load_config(path: &Path) -> AppConfig {
     AppConfig::default()
 }
 
+fn write_status_report(path: &Path, report: &StatusReport) {
+    if let Ok(json) = serde_json::to_string_pretty(report) {
+        let _ = fs::write(path, json);
+    }
+}
+
 fn is_sink_active(device_path: &str) -> bool {
+    // Quick check using lsof, optimized
     let output = Command::new("lsof")
         .arg(device_path)
         .output();
@@ -96,7 +111,9 @@ fn main() -> Result<()> {
     info!("Starting LinuxStudioEffects Daemon (Priority Mode)");
 
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let config_path = Path::new(&home).join(".config/linux-studio-effects/state.json");
+    let config_dir = Path::new(&home).join(".config/linux-studio-effects");
+    let config_path = config_dir.join("state.json");
+    let status_path = config_dir.join("state_report.json");
     
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent).ok();
@@ -120,6 +137,7 @@ fn main() -> Result<()> {
     })?;
     
     watcher.watch(&config_path, RecursiveMode::NonRecursive)?;
+
 
     // We need a loop that rebuilds the pipeline if it fails or if scans change
     // Using an Option<Pipeline> wrapper
@@ -218,32 +236,42 @@ fn main() -> Result<()> {
             
             // If running, apply dynamic config
             if let Some(p) = pl_opt.as_ref() {
-                // Check if pipeline needs to switch camera (Hot Swap)?
-                // If `last_cam` is not the best available anymore? 
-                // Checks every loop might be expensive. 
-                // Let's accept current camera unless it errors out.
-                
                 let _ = p.apply_config(
                     cfg.active, 
                     cfg.blur_strength, 
                     &cfg.sabotage,
-                    &cfg.effect_mode,
+                    &cfg.effects,
                     &cfg.background_image
                 );
             }
         }
+
+        // 3.5 Status Reporting
+        // We write the status report periodically or if changed (here every loop ~100ms is too much, so maybe throttle?)
+        // Let's do it every ~2s or if we just rebuilt.
+        // For simplicity, we just write it every loop for this prototype as OS file cache handles it? No, bad.
+        // Let's deduce "Tech" from config.
+        let tech_desc = match cfg.gpu_backend.as_str() {
+            "nvidia" => "Nvidia CUDA (nvvideoconvert)",
+            "intel" => "Intel QuickSync (vaapipostproc)",
+            "cpu" => "CPU (videoscale)",
+            "auto" | _ => "Auto/CPU",
+        };
+        
+        // Active effects desc
+        let report = StatusReport {
+            backend: cfg.gpu_backend.clone(),
+            tech: tech_desc.to_string(),
+            active_effects: if sink_active { cfg.effects.clone() } else { vec!["idle".to_string()] },
+            fps: 30, // Dummy for now
+        };
+        write_status_report(&status_path, &report);
         
         // 4. Handle GStreamer Bus (if pipeline exists)
-        // We need to briefly unlock to let idle thread work? 
-        // No, we removed idle thread logic, doing it all here. I removed the code inside idle thread.
-        // Wait, `Command::new("lsof")` is slow. doing it in main loop blocking bus is bad?
-        // `bus.timed_pop` handles the sleep.
-        // `lsof` every 2s is fine.
-        
         let mut error_needs_rebuild = false;
         
         if let Some(lock) = pipeline_store.lock().unwrap().as_ref() {
-            if let Some(bus) = lock.pipeline.bus() {
+            if let Some(bus) = lock.pipeline.bus() { // pipeline.bus() return is cheap
                 match bus.timed_pop(Some(Duration::from_millis(100))) {
                      Some(msg) => {
                          match msg.view() {

@@ -251,7 +251,7 @@ impl StudioPipeline {
         Ok(())
     }
 
-    pub fn apply_config(&self, active: bool, blur_strength: f32, sabotage: &str, effect_mode: &str, bg_image: &str) -> Result<()> {
+    pub fn apply_config(&self, active: bool, blur_strength: f32, sabotage: &str, effects: &[String], bg_image: &str) -> Result<()> {
         if !active {
             // Switch to Path A
              if let Some(ref sel) = self.input_selector {
@@ -271,33 +271,20 @@ impl StudioPipeline {
                  }
                  
                  // Effect Chaining Logic:
-                 // "replace" | "replace_and_blur" -> Use BG Selector Sink 1 (Image)
-                 // "blur" -> Use BG Selector Sink 0 (Camera)
+                 // Check if "replace" is present in the list
+                 let use_image = effects.iter().any(|e| e.contains("replace"));
                  
                  // Find bg-selector
                  if let Some(bg_sel) = self.pipeline.by_name("bg-selector") {
-                     let use_image = effect_mode.contains("replace");
                      let active_pad_idx = if use_image { 1 } else { 0 };
-                     
-                     // Helper to find pad by index name pattern might be tricky if dynamic.
-                     // But we requested them in order 0, then 1.
-                     // Iterate pads?
-                     // For 'input-selector', "sink_%u".
-                     // We can try getting static pad "sink_0" / "sink_1" if we named them or if they follow standard naming.
-                     // Often request pads are named `sink_0`, `sink_1`.
                      
                      let pad_name = format!("sink_{}", active_pad_idx);
                      if let Some(pad) = bg_sel.static_pad(&pad_name) {
                          bg_sel.set_property("active-pad", &pad);
                      }
-                     
-                     // If we are using Image, we might want to update the `filesrc` location?
-                     // Since we used `videotestsrc` for robustness in the build step, we can't change file path easily without rebuilding 
-                     // or using a `urisourcebin`.
-                     // For this prototype, checking "replace" just switches to the test pattern (simulating a loaded image).
                  }
                  
-                 info!("Applied Effect Mode: {}, BG: {}, Blur: {}", effect_mode, bg_image, blur_strength);
+                 info!("Applied Effects: {:?}, BG: {}, Blur: {}", effects, bg_image, blur_strength);
              }
          }
 

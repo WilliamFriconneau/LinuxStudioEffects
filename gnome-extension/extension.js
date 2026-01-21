@@ -48,19 +48,38 @@ class StudioIndicator extends PanelMenu.Button {
         });
         this.menu.addMenuItem(blurItem);
         
-        // 3. Effect Mode
-        let modeItem = new PopupMenu.PopupSubMenuMenuItem("Effect Mode");
-        ["blur", "replace", "replace_and_blur"].forEach(m => {
-             let item = new PopupMenu.PopupMenuItem(m);
+        // 3. Effects (Presets)
+        let modeItem = new PopupMenu.PopupSubMenuMenuItem("Effects");
+        
+        let effectsPresets = [
+            { label: "Blur Background", val: ["blur"] },
+            { label: "Replace Background", val: ["replace"] },
+            { label: "Replace & Blur", val: ["replace", "blur"] }
+        ];
+
+        effectsPresets.forEach(preset => {
+             let item = new PopupMenu.PopupMenuItem(preset.label);
              item.connect('activate', () => {
-                 this._config.effect_mode = m;
+                 this._config.effects = preset.val;
                  this._saveConfig();
              });
              modeItem.menu.addMenuItem(item);
         });
         this.menu.addMenuItem(modeItem);
 
-        // 4. Sabotage
+        // 4. GPU Backend
+        let gpuItem = new PopupMenu.PopupSubMenuMenuItem("GPU Backend");
+        ["auto", "nvidia", "intel", "cpu"].forEach(backend => {
+            let item = new PopupMenu.PopupMenuItem(backend);
+            item.connect('activate', () => {
+                this._config.gpu_backend = backend;
+                this._saveConfig();
+            });
+            gpuItem.menu.addMenuItem(item);
+        });
+        this.menu.addMenuItem(gpuItem);
+
+        // 5. Sabotage
         let sabItem = new PopupMenu.PopupSubMenuMenuItem("Sabotage");
         ["none", "freeze", "glitch"].forEach(m => {
             let item = new PopupMenu.PopupMenuItem(m);
@@ -71,6 +90,31 @@ class StudioIndicator extends PanelMenu.Button {
             sabItem.menu.addMenuItem(item);
         });
         this.menu.addMenuItem(sabItem);
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        // 6. Status Indicator
+        this._statusItem = new PopupMenu.PopupMenuItem("Status: Checking...");
+        this.menu.addMenuItem(this._statusItem);
+        
+        // Poll status every 2 seconds
+        GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, () => {
+            this._updateStatus();
+            return true; // repeat
+        });
+    }
+
+    _updateStatus() {
+        try {
+            let file = Gio.File.new_for_path(GLib.get_home_dir() + "/.config/linux-studio-effects/state_report.json");
+            let [success, content] = file.load_contents(null);
+            if (success) {
+                let status = JSON.parse(new TextDecoder().decode(content));
+                this._statusItem.label.text = `Tech: ${status.tech}`;
+            }
+        } catch (e) {
+            // ignore
+        }
     }
 
     _loadConfig() {
@@ -83,7 +127,7 @@ class StudioIndicator extends PanelMenu.Button {
         } catch (e) {
             log("StudioEffects: Failed to load config " + e);
         }
-        return { active: true, blur_strength: 0.5, sabotage: "none", effect_mode: "blur" };
+        return { active: true, blur_strength: 0.5, sabotage: "none", effects: ["blur"], gpu_backend: "auto" };
     }
 
     _saveConfig() {
