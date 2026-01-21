@@ -28,10 +28,16 @@ struct AppConfig {
     effect_mode: String, // "blur", "replace", "replace_and_blur"
     #[serde(default)]
     background_image: String, // Path to image
+    #[serde(default = "default_gpu_backend")]
+    pub gpu_backend: String, // "auto", "nvidia", "intel", "cpu"
 }
 
 fn default_effect_mode() -> String {
     "blur".to_string()
+}
+
+fn default_gpu_backend() -> String {
+    "auto".to_string()
 }
 
 fn default_camera_priority() -> Vec<String> {
@@ -48,6 +54,7 @@ impl Default for AppConfig {
             lighting_boost: false,
             effect_mode: default_effect_mode(),
             background_image: "".to_string(),
+            gpu_backend: default_gpu_backend(),
         }
     }
 }
@@ -182,8 +189,8 @@ fn main() -> Result<()> {
             // If we should run but have no pipeline, try creating one
             if should_run && pl_opt.is_none() {
                 if let Some(cam) = find_best_camera(&cfg.camera_priority) {
-                    info!("Constructing pipeline with camera: {}", cam);
-                    match StudioPipeline::new(&cam) {
+                    info!("Constructing pipeline with camera: {} (GPU: {})", cam, cfg.gpu_backend);
+                    match StudioPipeline::new(&cam, &cfg.gpu_backend) {
                         Ok(p) => {
                             let _ = p.start(); // Start immediately if created
                             *pl_opt = Some(p);

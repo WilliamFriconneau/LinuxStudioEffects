@@ -29,23 +29,46 @@ pub struct StudioPipeline {
 }
 
 impl StudioPipeline {
-    pub fn new(camera_path: &str) -> Result<Self> {
+    pub fn new(camera_path: &str, gpu_backend: &str) -> Result<Self> {
         gstreamer::init()?;
 
         // Try building Path B (AI) first.
-        match Self::build_pipeline(camera_path, true) {
+        match Self::build_pipeline(camera_path, true, gpu_backend) {
             Ok(p) => {
-                info!("Successfully built AI Pipeline (Path B).");
+                info!("Successfully built AI Pipeline (Path B) with backend: {}", gpu_backend);
                 Ok(p)
             }
             Err(e) => {
                 warn!("Failed to build AI Pipeline: {}. Fallback to Safety Path A.", e);
-                Self::build_pipeline(camera_path, false)
+                Self::build_pipeline(camera_path, false, gpu_backend)
             }
         }
     }
 
-    fn build_pipeline(camera_path: &str, use_ai: bool) -> Result<Self> {
+    // Helper to get efficient scaler based on backend
+    fn get_scaler(backend: &str) -> Element {
+        let name = match backend {
+            "nvidia" => "nvvideoconvert",
+            "intel" => "vaapipostproc",
+            "cpu" => "videoscale",
+            _ => "videoscale", // auto/fallback
+        };
+        
+        // If specific backend requested but missing, we should probably warn or fallback.
+        // For now, we try to make it. If it fails, the whole pipeline build fails and we might fallback to Safety or crash if user forced it.
+        // Robustness: Try to make it, if fail, fallback to videoscale immediately?
+        // Let's rely on GStreamer Factory.
+        
+        match ElementFactory::make(name).build() {
+            Ok(el) => el,
+            Err(_) => {
+                warn!("Backend element '{}' not found. Falling back to videoscale.", name);
+                ElementFactory::make("videoscale").build().unwrap()
+            }
+        } 
+    }
+
+    fn build_pipeline(camera_path: &str, use_ai: bool, gpu_backend: &str) -> Result<Self> {
         let pipeline = Pipeline::new(Some("studio-pipeline"));
         
         // 1. Source & Common
@@ -131,7 +154,7 @@ impl StudioPipeline {
             // For stability, we use videotestsrc. Real impl would use `filesrc ! decodebin ! imagefreeze`.
             let img_src = ElementFactory::make("videotestsrc").property("pattern", 2).build()?; // 2 = Black? or Pattern
             // We need to scale image to 1080p to match
-            let img_scale = ElementFactory::make("videoscale").build()?;
+            let img_scale = Self::get_scaler(gpu_backend); // Use efficient scaler
             let img_caps = gstreamer::Caps::builder("video/x-raw")
                  .field("width", 1920)
                  .field("height", 1080)
@@ -153,7 +176,10 @@ impl StudioPipeline {
             // ... AI Path (Mask Generation) ...
             // (Existing queue_ai -> scale -> ort -> scale -> filter -> comp_pad1)
             let queue_ai = ElementFactory::make("queue").build()?;
-            let scale_down = ElementFactory::make("videoscale").build()?;
+            
+            // Use efficient scaler for AI input preprocessing too!
+            let scale_down = Self::get_scaler(gpu_backend); 
+            
             let caps_256 = gstreamer::Caps::builder("video/x-raw")
                 .field("width", 256)
                 .field("height", 256)
@@ -166,7 +192,9 @@ impl StudioPipeline {
             // For now, we assume the element exists / is successful.
             let ort_filter = ElementFactory::make("identity").name("ort-filter").build()?;
             
-            let scale_up = ElementFactory::make("videoscale").build()?;
+            // And efficient scaler for upscaling mask
+            let scale_up = Self::get_scaler(gpu_backend);
+            
              let caps_1080 = gstreamer::Caps::builder("video/x-raw")
                 .field("width", 1920)
                 .field("height", 1080)
