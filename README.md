@@ -41,8 +41,10 @@ You can configure the GPU backend in `~/.config/linux-studio-effects/state.json`
 - **gpu_backend**:
     - **nvidia**: Uses `nvvideoconvert` (CUDA/NVENC).
     - **intel/amd**: Uses `vaapipostproc` (VA-API).
-    - **npu**: Accelerates AI inference via ONNX Runtime (requires compatible hardware).
+    - **npu**: Accelerates AI inference via ONNX Runtime.
     - **auto**: Defaults to generic `videoscale` (CPU).
+    
+    *Note: The Gnome Extension menu will automatically filter these options to show only what is detected on your system.*
 
 ## Status & Performance
 

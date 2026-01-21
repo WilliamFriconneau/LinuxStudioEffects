@@ -39,6 +39,7 @@ struct StatusReport {
     active_effects: Vec<String>,
     fps: u32,
     latency_us: u64,
+    available_backends: Vec<String>,
 }
 
 fn default_effects() -> Vec<String> {
@@ -107,9 +108,39 @@ fn find_best_camera(priority: &[String]) -> Option<String> {
     None
 }
 
+fn detect_backends() -> Vec<String> {
+    let mut backends = vec!["auto".to_string(), "cpu".to_string()]; // Always available
+    
+    // Check GStreamer registry for specific elements
+    // Note: gstreamer::init() must be called before this.
+    // In main(), we init early.
+    
+    if gstreamer::ElementFactory::find("nvvideoconvert").is_some() {
+        backends.push("nvidia".to_string());
+    }
+    
+    if gstreamer::ElementFactory::find("vaapipostproc").is_some() {
+        backends.push("intel".to_string());
+        backends.push("amd".to_string()); // AMD also uses vaapi, so if vaapi is present, offer it.
+    }
+    
+    // NPU / ONNX detection is harder without trying to load the model.
+    // Use a placeholder or check for 'ort' lib? 
+    // For now, always offer 'npu' if user wants to try it, or maybe hide it?
+    backends.push("npu".to_string()); // Always offer NPU option as it depends on runtime libs not gst elements
+    
+    backends
+}
+
 fn main() -> Result<()> {
     env_logger::init();
     info!("Starting LinuxStudioEffects Daemon (Priority Mode)");
+    
+    // Init GStreamer early for detection
+    gstreamer::init()?;
+
+    let detected_backends = detect_backends();
+    info!("Detected Hardware Backends: {:?}", detected_backends);
 
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     let config_dir = Path::new(&home).join(".config/linux-studio-effects");
@@ -271,6 +302,7 @@ fn main() -> Result<()> {
             active_effects: if sink_active { cfg.effects.clone() } else { vec!["idle".to_string()] },
             fps: 30, // Dummy for now
             latency_us: current_latency,
+            available_backends: detected_backends.clone(),
         };
         write_status_report(&status_path, &report);
         
