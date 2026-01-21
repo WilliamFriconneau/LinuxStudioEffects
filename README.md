@@ -44,7 +44,13 @@ You can configure the GPU backend in `~/.config/linux-studio-effects/state.json`
     - **npu**: Accelerates AI inference via ONNX Runtime.
     - **auto**: Defaults to generic `videoscale` (CPU).
     
-    *Note: The Gnome Extension menu will automatically filter these options to show only what is detected on your system.*
+### AI Models (NPU/GPU)
+
+To use the AI features (NPU/GPU/CPU inference), you must place a valid ONNX segmentation model at:
+
+`~/.config/linux-studio-effects/models/segmentation.onnx`
+
+If this model is missing, the AI pipeline will fail to initialize and the system may revert to "Safety" mode or output a warning.
 
 ### Troubleshooting Drivers
 
