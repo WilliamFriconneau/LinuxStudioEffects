@@ -131,31 +131,15 @@ impl StudioPipeline {
 
         if use_ai {
             // Path B: AI Processing
-            // We need a composite: Background + Mask
-            // t -> queue -> compositor:sink_0 (BG)
-            // t -> queue -> videoscale(256) -> ORT -> videoscale(1080) -> compositor:sink_1 (Mask?)
-            // actually, typical bg blur is: input -> blur -> composite(masked_input)?
-            // User says: "Upscale the resulting mask to 1080p and composite."
-            // This implies: Input + Mask -> Output. 
-            // ORT output is likely a segmentation mask.
-            // Simplified for this task: We will construct the GStreamer graph nodes.
-            // The "ORT Tensor Filter" will be simulated or placeholder if actual ORT code is too complex for this single file without crates.
-            // But we must construct the topology.
-            
             let comp = ElementFactory::make("compositor").build()?;
             pipeline.add(&comp)?;
             compositor = Some(comp.clone());
 
-            // AI Path (Sidecar) structure
-            // We need a way to switch the BACKGROUND (Sink 0 of compositor) between:
-            // 1. Live Camera (for Blur)
-            // 2. Static Image (for Replace)
-            // We can use an `input-selector` for the Background logic too!
-            
+            // Background Selector Logic
             let bg_selector = ElementFactory::make("input-selector").name("bg-selector").build()?;
             pipeline.add(&bg_selector)?;
             
-            // BG Option 1: Live Camera (from tee)
+            // BG Option 1: Live Camera
             let queue_cam_bg = ElementFactory::make("queue").build()?;
             pipeline.add(&queue_cam_bg)?;
             tee.link(&queue_cam_bg)?;
@@ -163,11 +147,9 @@ impl StudioPipeline {
             let q_cbg_src = queue_cam_bg.static_pad("src").context("No queue src")?;
             q_cbg_src.link(&bg_sel_pad0)?;
             
-            // BG Option 2: Image Source (Placeholder pattern or file)
-            // For stability, we use videotestsrc. Real impl would use `filesrc ! decodebin ! imagefreeze`.
-            let img_src = ElementFactory::make("videotestsrc").property("pattern", 2).build()?; // 2 = Black? or Pattern
-            // We need to scale image to 1080p to match
-            let img_scale = Self::get_scaler(gpu_backend); // Use efficient scaler
+            // BG Option 2: Image Source
+            let img_src = ElementFactory::make("videotestsrc").property("pattern", 2).build()?; 
+            let img_scale = Self::get_scaler(gpu_backend); 
             let img_caps = gstreamer::Caps::builder("video/x-raw")
                  .field("width", 1920)
                  .field("height", 1080)
@@ -187,37 +169,71 @@ impl StudioPipeline {
             bg_sel_src.link(&comp_pad0)?;
             
             // ... AI Path (Mask Generation) ...
-            // (Existing queue_ai -> scale -> ort -> scale -> filter -> comp_pad1)
             let queue_ai = ElementFactory::make("queue").build()?;
-            
-            // Use efficient scaler for AI input preprocessing too!
             let scale_down = Self::get_scaler(gpu_backend); 
             
             let caps_256 = gstreamer::Caps::builder("video/x-raw")
                 .field("width", 256)
                 .field("height", 256)
-                .field("format", "RGB") // Force RGB for ArrayView3 match
+                .field("format", "RGB")
                 .build();
             let filter_256 = ElementFactory::make("capsfilter").property("caps", &caps_256).build()?;
             
-            // ORT placeholder - In real impl, this is `appsrc`/`appsink` or a custom element.
-            // We'll use identity as a placeholder for the "Fail-Safe" construction logic.
-            // If this crashes (e.g. if we used a real interacting element that failed init), we'd return Err.
-            // For now, we assume the element exists / is successful.
-            let ort_filter = ElementFactory::make("identity").name("ort-filter").build()?;
+            // ORT Integration via AppSink -> AppSrc
+            let appsink = ElementFactory::make("appsink").name("ai-sink").build()?;
+            let appsink = appsink.dynamic_cast::<gstreamer_app::AppSink>().unwrap();
+            appsink.set_caps(Some(&caps_256));
+            appsink.set_max_buffers(1);
+            appsink.set_drop(true); 
             
-            // And efficient scaler for upscaling mask
-            let scale_up = Self::get_scaler(gpu_backend);
-            
-             let caps_1080 = gstreamer::Caps::builder("video/x-raw")
-                .field("width", 1920)
-                .field("height", 1080)
+            let appsrc = ElementFactory::make("appsrc").name("ai-src").build()?;
+            let appsrc = appsrc.dynamic_cast::<gstreamer_app::AppSrc>().unwrap();
+            let mask_caps = gstreamer::Caps::builder("video/x-gray-8")
+                .field("width", 256)
+                .field("height", 256)
+                .field("framerate", gstreamer::Fraction::new(30, 1))
                 .build();
-            let filter_1080 = ElementFactory::make("capsfilter").property("caps", &caps_1080).build()?;
+             appsrc.set_caps(Some(&mask_caps));
+             
+             let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+             let model_path = format!("{}/.config/linux-studio-effects/models/segmentation.onnx", home);
+             let backend_clone = gpu_backend.to_string();
+             
+             std::thread::spawn(move || {
+                 match crate::ai::SegmentationEngine::new(&model_path, &backend_clone) {
+                     Ok(engine) => {
+                         loop {
+                             if let Ok(sample) = appsink.pull_sample() {
+                                 if let Some(buffer) = sample.buffer() {
+                                     let map = buffer.map_readable().unwrap();
+                                     let data = map.as_slice();
+                                     if data.len() == 256*256*3 {
+                                         if let Ok(tensor) = ndarray::ArrayView3::from_shape((256, 256, 3), data) {
+                                             if let Ok(mask) = engine.infer(tensor) {
+                                                 let mut out_buf = gstreamer::Buffer::from_slice(mask);
+                                                 if let Some(pts) = buffer.pts() {
+                                                      let _ = out_buf.get_mut().unwrap().set_pts(pts);
+                                                 }
+                                                 let _ = appsrc.push_buffer(out_buf);
+                                             }
+                                         }
+                                     }
+                                 }
+                             } else { break; }
+                         }
+                     },
+                     Err(e) => error!("AI Init Failed: {}", e),
+                 }
+             });
 
-            pipeline.add_many(&[&queue_ai, &scale_down, &filter_256, &ort_filter, &scale_up, &filter_1080])?;
+            // Scaler and Converter for Mask
+            let scale_up = Self::get_scaler(gpu_backend);
+            let videoconvert = ElementFactory::make("videoconvert").build()?;
+
+            pipeline.add_many(&[&queue_ai, &scale_down, &filter_256, &appsink.upcast_ref(), &appsrc.upcast_ref(), &scale_up, &videoconvert])?;
             
-            Element::link_many(&[&tee, &queue_ai, &scale_down, &filter_256, &ort_filter, &scale_up, &filter_1080])?;
+            Element::link_many(&[&tee, &queue_ai, &scale_down, &filter_256, &appsink.upcast_ref()])?;
+            Element::link_many(&[&appsrc.upcast_ref(), &scale_up, &videoconvert])?;
             
             // Link AI result to compositor pad 1
             let comp_pad1 = comp.request_pad_simple("sink_%u").context("No comp pad 2")?;
@@ -225,9 +241,7 @@ impl StudioPipeline {
             ai_src.link(&comp_pad1)?;
 
             // Output of compositor -> input-selector:sink_1
-            // We use a valve here for the "Freeze" sabotage? 
-            // "Freeze: Set a pad_probe on the output queue... or use a valve"
-            let v = ElementFactory::make("valve").property("drop", false).build()?; // drop=false means pass initially
+            let v = ElementFactory::make("valve").property("drop", false).build()?; 
             pipeline.add(&v)?;
             valve = Some(v.clone());
             
@@ -237,12 +251,11 @@ impl StudioPipeline {
             let v_src = v.static_pad("src").context("No valve src")?;
             v_src.link(&sel_pad1)?;
             
-            // Set selector to use sink_1 (AI) by default
             input_selector.set_property("active-pad", &sel_pad1);
         } else {
-            // Safety mode only, selector default is sink_0
-            let sel_pad0 = input_selector.static_pad("sink_0").or_else(|| input_selector.static_pad("sink_0")).unwrap(); // simplified
-             input_selector.set_property("active-pad", &sel_pad0);
+            // Safety mode only
+            let sel_pad0 = input_selector.static_pad("sink_0").or_else(|| input_selector.static_pad("sink_0")).unwrap(); 
+            input_selector.set_property("active-pad", &sel_pad0);
         }
 
         Ok(Self {
