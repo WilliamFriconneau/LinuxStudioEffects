@@ -46,6 +46,25 @@ You can configure the GPU backend in `~/.config/linux-studio-effects/state.json`
     
     *Note: The Gnome Extension menu will automatically filter these options to show only what is detected on your system.*
 
+### Troubleshooting Drivers
+
+If **AMD** or **Intel** options do not appear in the menu, you are likely missing the GStreamer VA-API plugins.
+
+**Debian/Ubuntu:**
+```bash
+sudo apt install gstreamer1.0-vaapi mesa-va-drivers
+```
+
+**Fedora:**
+```bash
+sudo dnf install gstreamer1-vaapi libva-utils
+```
+
+**Arch:**
+```bash
+sudo pacman -S gstreamer-vaapi libva-mesa-driver
+```
+
 ## Status & Performance
 
 The Extension now displays real-time status of the pipeline, including:
