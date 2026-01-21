@@ -221,7 +221,7 @@ impl StudioPipeline {
             
             // Link AI result to compositor pad 1
             let comp_pad1 = comp.request_pad_simple("sink_%u").context("No comp pad 2")?;
-            let ai_src = filter_1080.static_pad("src").context("No ai src")?;
+            let ai_src = videoconvert.static_pad("src").context("No ai src")?;
             ai_src.link(&comp_pad1)?;
 
             // Output of compositor -> input-selector:sink_1
