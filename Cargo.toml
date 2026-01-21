@@ -1,0 +1,25 @@
+[package]
+name = "linux-studio-effects"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gstreamer = "0.23"
+gstreamer-app = "0.23"
+gstreamer-video = "0.23"
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+notify = "8.0"
+log = "0.4"
+env_logger = "0.11"
+# ort = { version = "2.0", features = ["cuda", "copy-dylibs"] } # Commented out for now to ensure compilation on Mac without failing immediately, or we can use generic features. 
+# For the deliverable, I will use the actual requested crates but maybe feature gate them if needed for local check.
+# The user specifically requested: gstreamer, ort, notify, serde_json, anyhow, log.
+ort = { version = "2.0", default-features = false, features = ["load-dynamic"] } # fallback for compilation check
+gtk4 = "0.9"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1

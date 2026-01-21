@@ -1,0 +1,6 @@
+{
+  "name": "Linux Studio Effects",
+  "description": "Quick controls for Webcam Effects Daemon",
+  "uuid": "studio-effects@wiwi.local",
+  "shell-version": [ "45", "46", "47" ]
+}
