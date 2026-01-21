@@ -38,6 +38,7 @@ struct StatusReport {
     tech: String, // e.g. "Nvidia CUDA", "Intel QuickSync", "CPU"
     active_effects: Vec<String>,
     fps: u32,
+    latency_us: u64,
 }
 
 fn default_effects() -> Vec<String> {
@@ -188,6 +189,9 @@ fn main() -> Result<()> {
     
     let mut last_cam: Option<String> = None;
     
+    // Shared metrics
+    let latency_us = Arc::new(std::sync::atomic::AtomicU64::new(0));
+
     loop {
         // 1. Load Config (if changed)
         if let Ok(_) = rx_config.try_recv() {
@@ -208,7 +212,8 @@ fn main() -> Result<()> {
             if should_run && pl_opt.is_none() {
                 if let Some(cam) = find_best_camera(&cfg.camera_priority) {
                     info!("Constructing pipeline with camera: {} (GPU: {})", cam, cfg.gpu_backend);
-                    match StudioPipeline::new(&cam, &cfg.gpu_backend) {
+                    // Pass metrics to pipeline
+                    match StudioPipeline::new(&cam, &cfg.gpu_backend, latency_us.clone()) {
                         Ok(p) => {
                             let _ = p.start(); // Start immediately if created
                             *pl_opt = Some(p);
@@ -247,23 +252,25 @@ fn main() -> Result<()> {
         }
 
         // 3.5 Status Reporting
-        // We write the status report periodically or if changed (here every loop ~100ms is too much, so maybe throttle?)
-        // Let's do it every ~2s or if we just rebuilt.
-        // For simplicity, we just write it every loop for this prototype as OS file cache handles it? No, bad.
-        // Let's deduce "Tech" from config.
         let tech_desc = match cfg.gpu_backend.as_str() {
             "nvidia" => "Nvidia CUDA (nvvideoconvert)",
             "intel" => "Intel QuickSync (vaapipostproc)",
+            "amd" => "AMD VA-API (vaapipostproc)",
+            "npu" => "NPU (Accelerated)",
             "cpu" => "CPU (videoscale)",
             "auto" | _ => "Auto/CPU",
         };
         
+        // Read metrics
+        let current_latency = latency_us.load(std::sync::atomic::Ordering::Relaxed);
+
         // Active effects desc
         let report = StatusReport {
             backend: cfg.gpu_backend.clone(),
             tech: tech_desc.to_string(),
             active_effects: if sink_active { cfg.effects.clone() } else { vec!["idle".to_string()] },
             fps: 30, // Dummy for now
+            latency_us: current_latency,
         };
         write_status_report(&status_path, &report);
         

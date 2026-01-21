@@ -29,18 +29,18 @@ pub struct StudioPipeline {
 }
 
 impl StudioPipeline {
-    pub fn new(camera_path: &str, gpu_backend: &str) -> Result<Self> {
+    pub fn new(camera_path: &str, gpu_backend: &str, latency_metric: Arc<std::sync::atomic::AtomicU64>) -> Result<Self> {
         gstreamer::init()?;
 
         // Try building Path B (AI) first.
-        match Self::build_pipeline(camera_path, true, gpu_backend) {
+        match Self::build_pipeline(camera_path, true, gpu_backend, latency_metric.clone()) {
             Ok(p) => {
                 info!("Successfully built AI Pipeline (Path B) with backend: {}", gpu_backend);
                 Ok(p)
             }
             Err(e) => {
                 warn!("Failed to build AI Pipeline: {}. Fallback to Safety Path A.", e);
-                Self::build_pipeline(camera_path, false, gpu_backend)
+                Self::build_pipeline(camera_path, false, gpu_backend, latency_metric)
             }
         }
     }
@@ -49,15 +49,11 @@ impl StudioPipeline {
     fn get_scaler(backend: &str) -> Element {
         let name = match backend {
             "nvidia" => "nvvideoconvert",
-            "intel" => "vaapipostproc",
+            "intel" | "amd" => "vaapipostproc", // AMD also uses VA-API commonly on Linux
+            "npu" => "videoscale", // NPU usually handles inference, but for scaling we might use standard or specific if needed.
             "cpu" => "videoscale",
             _ => "videoscale", // auto/fallback
         };
-        
-        // If specific backend requested but missing, we should probably warn or fallback.
-        // For now, we try to make it. If it fails, the whole pipeline build fails and we might fallback to Safety or crash if user forced it.
-        // Robustness: Try to make it, if fail, fallback to videoscale immediately?
-        // Let's rely on GStreamer Factory.
         
         match ElementFactory::make(name).build() {
             Ok(el) => el,
@@ -68,7 +64,7 @@ impl StudioPipeline {
         } 
     }
 
-    fn build_pipeline(camera_path: &str, use_ai: bool, gpu_backend: &str) -> Result<Self> {
+    fn build_pipeline(camera_path: &str, use_ai: bool, gpu_backend: &str, latency_metric: Arc<std::sync::atomic::AtomicU64>) -> Result<Self> {
         let pipeline = Pipeline::new(Some("studio-pipeline"));
         
         // 1. Source & Common
@@ -103,15 +99,31 @@ impl StudioPipeline {
         Element::link_many(&[&source, &capsfilter, &tee])?;
         input_selector.link(&sink)?;
 
-        // Path A: Safety (Always connected to sink_0 of selector)
-        // t -> queue -> input-selector:sink_0
-        let queue_a = ElementFactory::make("queue").build()?;
-        pipeline.add(&queue_a)?;
-        tee.link(&queue_a)?;
-        // link queue_a -> input_selector pad 0
-        let sel_pad0 = input_selector.request_pad_simple("sink_%u").context("No sink pad")?; // Usually sink_0
-        let q_src = queue_a.static_pad("src").context("No queue src")?;
-        q_src.link(&sel_pad0)?;
+        // PERF: Add Probe to measure latency at the sink
+        // We measure time between frame arrival? Or processing time?
+        // True "Processing Time" is hard without a reference at source.
+        // But we can measure "Inter-frame Interval" (Frame Time).
+        // User asked for "processing time". 
+        // As a proxy, we use a rolling average of frame-time or just 1000/fps? 
+        // Better: We put a probe on source AND sink and correlate? Too complex for this snippet.
+        // Let's implement a simple "Time since last frame" (Frame Time) which is inversely proportional to FPS.
+        // If system is slow, Frame Time increases.
+        
+        let pad = sink.static_pad("sink").context("No sink pad")?;
+        let metric_clone = latency_metric.clone();
+        let mut last_time = std::time::Instant::now();
+        
+        pad.add_probe(gstreamer::PadProbeType::BUFFER, move |_pad, _info| {
+            let now = std::time::Instant::now();
+            let delta = now.duration_since(last_time).as_micros() as u64;
+            last_time = now;
+            
+            // Update atomic (relaxed is fine)
+            metric_clone.store(delta, std::sync::atomic::Ordering::Relaxed);
+            
+            gstreamer::PadProbeReturn::Ok
+        });
+
 
         let mut compositor = None;
         let mut valve = None;

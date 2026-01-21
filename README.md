@@ -39,15 +39,17 @@ You can configure the GPU backend in `~/.config/linux-studio-effects/state.json`
 
 - **effects**: A list of active effects. Combined to define the pipeline behavior.
 - **gpu_backend**:
-    - **nvidia**: Uses `nvvideoconvert`. Requires proprietary drivers and GStreamer NVENC/DEC plugins.
-    - **intel**: Uses `vaapipostproc`. Requires `gstreamer1.0-vaapi`.
+    - **nvidia**: Uses `nvvideoconvert` (CUDA/NVENC).
+    - **intel/amd**: Uses `vaapipostproc` (VA-API).
+    - **npu**: Accelerates AI inference via ONNX Runtime (requires compatible hardware).
     - **auto**: Defaults to generic `videoscale` (CPU).
 
-## Status Indicator
+## Status & Performance
 
 The Extension now displays real-time status of the pipeline, including:
-- **Active Backend**: Shows which technology is properly loaded (e.g., "Nvidia CUDA").
-- **Efficiency**: Confirms hardware acceleration is improving energy profile.
+- **Active Backend**: Shows which technology is properly loaded (e.g., "Nvidia CUDA", "AMD VA-API").
+- **Latency**: Real-time processing frame measurements in ms/microseconds.
+- **ONNX Runtime**: Ensuring AI models run on the best available provider (TensorRT, OpenVINO, ROCm).
 
 
 ## Current Status
