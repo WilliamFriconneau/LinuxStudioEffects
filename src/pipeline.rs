@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use gstreamer::prelude::*;
 use gstreamer::{Element, ElementFactory, Pipeline, State};
+use gstreamer_app::prelude::*; // For AppSink/Src traits
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use log::{info, warn, error};
@@ -195,6 +196,7 @@ impl StudioPipeline {
             let caps_256 = gstreamer::Caps::builder("video/x-raw")
                 .field("width", 256)
                 .field("height", 256)
+                .field("format", "RGB") // Force RGB for ArrayView3 match
                 .build();
             let filter_256 = ElementFactory::make("capsfilter").property("caps", &caps_256).build()?;
             

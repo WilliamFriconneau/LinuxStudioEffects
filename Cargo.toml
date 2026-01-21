@@ -16,7 +16,9 @@ env_logger = "0.11"
 # ort = { version = "2.0", features = ["cuda", "copy-dylibs"] } # Commented out for now to ensure compilation on Mac without failing immediately, or we can use generic features. 
 # For the deliverable, I will use the actual requested crates but maybe feature gate them if needed for local check.
 # The user specifically requested: gstreamer, ort, notify, serde_json, anyhow, log.
-ort = { version = "2.0", default-features = false, features = ["load-dynamic"] } # fallback for compilation check
+# We enable 'load-dynamic' to allow linking lagainst shared libs (VitisAI, CUDA, etc.) found on system.
+ort = { version = "2.0", features = ["load-dynamic", "ndarray"] } 
+ndarray = "0.15"
 gtk4 = "0.9"
 
 [profile.release]
